@@ -19,6 +19,7 @@ class RemapperScroll:
     def __init__(self, name, vendor, product,
                  scroll_idle=0.15, div_y=60.0, div_x=120.0,
                  deadzone=3.0, max_step=3, hold_grace=0.08,
+                 click_gap=0.04,
                  virtual_name="Genius-Remapped Mouse",
                  on_recv=None, on_act=None):
         self.name, self.vendor, self.product = name, vendor, product
@@ -28,6 +29,7 @@ class RemapperScroll:
         self.max_step = int(max(1, max_step))
         self.hold_grace = float(hold_grace)
         self.virtual_name = virtual_name
+        self.click_gap = float(click_gap)
         self.on_recv = on_recv or (lambda _msg: None)
         self.on_act  = on_act  or (lambda _msg: None)
         self._thr = None
@@ -72,7 +74,11 @@ class RemapperScroll:
             scrolling = False
             last_scroll = 0.0
             last_wheel_ts = 0.0
+            last_code8_ts = 0.0
+            pending_mmb_ts = 0.0
             ry = rx = 0.0
+
+            def syn(): ui.syn()
 
             def begin_scroll(ts):
                 nonlocal scrolling, last_scroll, ry, rx
@@ -89,12 +95,21 @@ class RemapperScroll:
                     ry = rx = 0.0
                     self.on_act(tag)
 
-            def syn(): ui.syn()
+            def emit_mmb():
+                nonlocal pending_mmb_ts
+                end_scroll("[MMB]")
+                ui.write(E.EV_KEY, E.BTN_MIDDLE, 1); syn()
+                ui.write(E.EV_KEY, E.BTN_MIDDLE, 0); syn()
+                self.on_act("MMB CLICK")
+                pending_mmb_ts = 0.0
 
             while not self._stop.is_set():
                 fds = [d.fd for d in srcs]
                 r,_,_ = select.select(fds, [], [], 0.01)
                 now = time.time()
+
+                if pending_mmb_ts and (now - pending_mmb_ts) > self.click_gap:
+                    emit_mmb()
 
                 if scrolling and (now - last_wheel_ts) > self.hold_grace:
                     end_scroll("[RELEASE]")
@@ -109,11 +124,17 @@ class RemapperScroll:
                             if ev.code in (E.REL_WHEEL, 11, 12):
                                 self.on_recv(f"TICK code={ev.code} val={ev.value}")
                                 last_wheel_ts = now
+                                if ev.code == E.REL_WHEEL:
+                                    if (now - last_code8_ts) > self.click_gap:
+                                        pending_mmb_ts = now
+                                    else:
+                                        pending_mmb_ts = 0.0
+                                    last_code8_ts = now
                                 begin_scroll(now)
                                 continue
 
                             if ev.code in (E.REL_X, E.REL_Y):
-                                self.on_recv(f"MOVE {'X' if ev.code==E.REL_X else 'Y'} {ev.value}")
+                                # self.on_recv(f"MOVE {'X' if ev.code==E.REL_X else 'Y'} {ev.value}")
                                 if scrolling:
                                     if ev.code == E.REL_Y:
                                         ry += ev.value

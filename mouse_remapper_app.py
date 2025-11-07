@@ -14,7 +14,7 @@ AUTOSTART = AUTOSTART_DIR/"genius-remapper.desktop"
 DEFAULTS = dict(
     device_name="Genius Wireless Mouse", vendor=0x0458, product=0x0189,
     scroll_idle=0.15, div_y=60.0, div_x=120.0,
-    deadzone=3.0, max_step=3, hold_grace=0.08,
+    deadzone=3.0, max_step=3, hold_grace=0.08, click_gap=0.04,
     remember=True, autostart=False
 )
 
@@ -24,14 +24,18 @@ def load_cfg():
             stored = json.loads(CFG.read_text())
             if "hold_grace" not in stored and "tick_grace" in stored:
                 stored["hold_grace"] = stored.get("tick_grace", DEFAULTS["hold_grace"])
+            if "click_gap" not in stored:
+                stored["click_gap"] = DEFAULTS["click_gap"]
             return {**DEFAULTS, **stored}
     except Exception: pass
     return dict(DEFAULTS)
 
 def save_cfg(c):
-    if not c.get("remember", True): return
     CFG_DIR.mkdir(parents=True, exist_ok=True)
-    CFG.write_text(json.dumps(c, indent=2))
+    payload = dict(c)
+    if not payload.get("remember", True):
+        payload = {k: payload[k] for k in ("remember", "autostart")}
+    CFG.write_text(json.dumps(payload, indent=2))
 
 def set_autostart(on):
     AUTOSTART_DIR.mkdir(parents=True, exist_ok=True)
@@ -70,23 +74,34 @@ class Main(QtWidgets.QMainWindow):
         w = QtWidgets.QWidget(); self.setCentralWidget(w)
         outer = QtWidgets.QVBoxLayout(w)
 
-        form = QtWidgets.QFormLayout(); outer.addLayout(form)
+        device_box = QtWidgets.QGroupBox("Pointer device")
+        device_form = QtWidgets.QFormLayout(device_box)
         self.cb_dev = QtWidgets.QComboBox()
         self.cb_dev.addItems([f"{n} (v={hex(v)} p={hex(p)})" for n,v,p in self.keys] or ["(no devices)"])
-        form.addRow("Device:", self.cb_dev)
+        device_form.addRow("Device:", self.cb_dev)
+        outer.addWidget(device_box)
 
+        scroll_box = QtWidgets.QGroupBox("Scroll tuning")
+        scroll_form = QtWidgets.QFormLayout(scroll_box)
         self.sb_idle = QtWidgets.QDoubleSpinBox(); self.sb_idle.setRange(0.05,1.0); self.sb_idle.setSingleStep(0.05); self.sb_idle.setSuffix(" s")
         self.sb_v = QtWidgets.QDoubleSpinBox(); self.sb_v.setRange(5.0,400.0); self.sb_v.setSingleStep(5.0)
         self.sb_h = QtWidgets.QDoubleSpinBox(); self.sb_h.setRange(5.0,400.0); self.sb_h.setSingleStep(5.0)
         self.sb_dead = QtWidgets.QDoubleSpinBox(); self.sb_dead.setRange(0.0,20.0); self.sb_dead.setSingleStep(0.5); self.sb_dead.setSuffix(" px")
         self.sb_max = QtWidgets.QSpinBox(); self.sb_max.setRange(1,10)
-        self.sb_grace = QtWidgets.QDoubleSpinBox(); self.sb_grace.setRange(0.05,0.30); self.sb_grace.setSingleStep(0.01); self.sb_grace.setSuffix(" s")
-        form.addRow("Scroll Idle:", self.sb_idle)
-        form.addRow("Vertical speed (↓ faster):", self.sb_v)
-        form.addRow("Horizontal speed:", self.sb_h)
-        form.addRow("Deadzone:", self.sb_dead)
-        form.addRow("Max step per frame:", self.sb_max)
-        form.addRow("Hold grace (release delay):", self.sb_grace)
+        scroll_form.addRow("Scroll idle:", self.sb_idle)
+        scroll_form.addRow("Vertical speed (↓ faster):", self.sb_v)
+        scroll_form.addRow("Horizontal speed:", self.sb_h)
+        scroll_form.addRow("Deadzone:", self.sb_dead)
+        scroll_form.addRow("Max step per frame:", self.sb_max)
+        outer.addWidget(scroll_box)
+
+        detect_box = QtWidgets.QGroupBox("Hold && click detection")
+        detect_form = QtWidgets.QFormLayout(detect_box)
+        self.sb_hold = QtWidgets.QDoubleSpinBox(); self.sb_hold.setRange(0.05,0.30); self.sb_hold.setSingleStep(0.01); self.sb_hold.setSuffix(" s")
+        self.sb_click = QtWidgets.QDoubleSpinBox(); self.sb_click.setRange(0.02,0.20); self.sb_click.setSingleStep(0.005); self.sb_click.setDecimals(3); self.sb_click.setSuffix(" s")
+        detect_form.addRow("Hold grace (release delay):", self.sb_hold)
+        detect_form.addRow("Click gap (MMB window):", self.sb_click)
+        outer.addWidget(detect_box)
 
         hb = QtWidgets.QHBoxLayout()
         b1 = QtWidgets.QPushButton("Start"); b1.clicked.connect(self.start_remap)
@@ -113,7 +128,7 @@ class Main(QtWidgets.QMainWindow):
         self.status = QtWidgets.QLabel("Idle"); outer.addWidget(self.status)
 
         self.cb_dev.currentIndexChanged.connect(self.on_cfg_change)
-        for s in (self.sb_idle, self.sb_v, self.sb_h, self.sb_dead, self.sb_max, self.sb_grace):
+        for s in (self.sb_idle, self.sb_v, self.sb_h, self.sb_dead, self.sb_max, self.sb_hold, self.sb_click):
             s.valueChanged.connect(self.on_cfg_change)
         self.chk_mem.toggled.connect(self.on_cfg_change)
 
@@ -134,7 +149,8 @@ class Main(QtWidgets.QMainWindow):
         self.sb_h.setValue(self.cfg["div_x"])
         self.sb_dead.setValue(self.cfg["deadzone"])
         self.sb_max.setValue(self.cfg["max_step"])
-        self.sb_grace.setValue(self.cfg["hold_grace"])
+        self.sb_hold.setValue(self.cfg["hold_grace"])
+        self.sb_click.setValue(self.cfg["click_gap"])
         self.chk_mem.setChecked(self.cfg.get("remember", True))
         self.chk_auto.setChecked(self.cfg.get("autostart", False))
         self.update_tip()
@@ -147,7 +163,8 @@ class Main(QtWidgets.QMainWindow):
             scroll_idle=float(self.sb_idle.value()),
             div_y=float(self.sb_v.value()), div_x=float(self.sb_h.value()),
             deadzone=float(self.sb_dead.value()), max_step=int(self.sb_max.value()),
-            hold_grace=float(self.sb_grace.value()),
+            hold_grace=float(self.sb_hold.value()),
+            click_gap=float(self.sb_click.value()),
             remember=bool(self.chk_mem.isChecked()), autostart=bool(self.chk_auto.isChecked())
         )
 
@@ -167,7 +184,7 @@ class Main(QtWidgets.QMainWindow):
         self.remap = RemapperScroll(
             self.cfg["device_name"], self.cfg["vendor"], self.cfg["product"],
             self.cfg["scroll_idle"], self.cfg["div_y"], self.cfg["div_x"],
-            self.cfg["deadzone"], self.cfg["max_step"], self.cfg["hold_grace"],
+            self.cfg["deadzone"], self.cfg["max_step"], self.cfg["hold_grace"], self.cfg["click_gap"],
             on_recv=self.q_in.put, on_act=self.q_act.put
         )
         self.remap.start()
@@ -194,7 +211,8 @@ class Main(QtWidgets.QMainWindow):
     def update_tip(self):
         self.tray.setToolTip(
             f"{self.cfg.get('device_name','')} | idle={self.cfg.get('scroll_idle',0):.2f}s "
-            f"v={self.cfg.get('div_y',0):.0f} h={self.cfg.get('div_x',0):.0f} hold={self.cfg.get('hold_grace',0):.2f}s"
+            f"v={self.cfg.get('div_y',0):.0f} h={self.cfg.get('div_x',0):.0f} "
+            f"hold={self.cfg.get('hold_grace',0):.2f}s click={self.cfg.get('click_gap',0):.3f}s"
         )
 
     def toggle_visible(self): self.setVisible(not self.isVisible())
