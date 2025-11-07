@@ -78,3 +78,9 @@ On Linux this causes:
 - **Middle-click doesn’t trigger** – Increase the click gap toward `0.06` seconds if your firmware emits sparse ticks.
 
 Happy scrolling!
+
+---
+
+**License:** MIT (see `LICENSE`).
+
+**Credits:** Implementation authored with the assistance of OpenAI's GPT models.
