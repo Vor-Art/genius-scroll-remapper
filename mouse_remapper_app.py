@@ -85,35 +85,55 @@ class Main(QtWidgets.QMainWindow):
         device_form = QtWidgets.QFormLayout(device_box)
         self.cb_dev = QtWidgets.QComboBox()
         self.cb_dev.addItems([f"{n} (v={hex(v)} p={hex(p)})" for n,v,p in self.keys] or ["(no devices)"])
-        device_form.addRow("Device:", self.cb_dev)
+        tip_device = "Pick the physical mouse to grab and remap."
+        self.cb_dev.setToolTip(tip_device)
+        lbl_dev = QtWidgets.QLabel("Device:"); lbl_dev.setToolTip(tip_device)
+        device_form.addRow(lbl_dev, self.cb_dev)
         outer.addWidget(device_box)
 
         scroll_box = QtWidgets.QGroupBox("Scroll tuning")
         scroll_form = QtWidgets.QFormLayout(scroll_box)
         self.sb_idle = QtWidgets.QDoubleSpinBox(); self.sb_idle.setRange(0.05,1.0); self.sb_idle.setSingleStep(0.05); self.sb_idle.setSuffix(" s")
+        tip_idle = "Delay before scrolling auto-stops when the surface is idle."
+        self.sb_idle.setToolTip(tip_idle)
         self.sb_v = QtWidgets.QDoubleSpinBox(); self.sb_v.setRange(5.0,400.0); self.sb_v.setSingleStep(5.0)
+        tip_v = "Smaller = faster vertical scrolling per movement."
+        self.sb_v.setToolTip(tip_v)
         self.sb_h = QtWidgets.QDoubleSpinBox(); self.sb_h.setRange(5.0,400.0); self.sb_h.setSingleStep(5.0)
+        tip_h = "Smaller = faster horizontal scrolling per movement."
+        self.sb_h.setToolTip(tip_h)
         self.sb_dead = QtWidgets.QDoubleSpinBox(); self.sb_dead.setRange(0.0,20.0); self.sb_dead.setSingleStep(0.5); self.sb_dead.setSuffix(" px")
+        tip_dead = "Ignore tiny jitters below this delta."
+        self.sb_dead.setToolTip(tip_dead)
         self.sb_max = QtWidgets.QSpinBox(); self.sb_max.setRange(1,10)
-        scroll_form.addRow("Scroll idle:", self.sb_idle)
-        scroll_form.addRow("Vertical speed (↓ faster):", self.sb_v)
-        scroll_form.addRow("Horizontal speed:", self.sb_h)
-        scroll_form.addRow("Deadzone:", self.sb_dead)
-        scroll_form.addRow("Max step per frame:", self.sb_max)
+        tip_max = "Cap emitted wheel steps per frame so scroll bursts stay smooth."
+        self.sb_max.setToolTip(tip_max)
+        scroll_form.addRow(self._with_tip("Scroll idle:", tip_idle), self.sb_idle)
+        scroll_form.addRow(self._with_tip("Vertical speed (↓ faster):", tip_v), self.sb_v)
+        scroll_form.addRow(self._with_tip("Horizontal speed:", tip_h), self.sb_h)
+        scroll_form.addRow(self._with_tip("Deadzone:", tip_dead), self.sb_dead)
+        scroll_form.addRow(self._with_tip("Max step per frame:", tip_max), self.sb_max)
         outer.addWidget(scroll_box)
 
         detect_box = QtWidgets.QGroupBox("Hold && click detection")
         detect_form = QtWidgets.QFormLayout(detect_box)
         self.sb_hold = QtWidgets.QDoubleSpinBox(); self.sb_hold.setRange(0.05,0.30); self.sb_hold.setSingleStep(0.01); self.sb_hold.setSuffix(" s")
+        tip_hold = "Max time without wheel ticks before scroll releases."
+        self.sb_hold.setToolTip(tip_hold)
         self.sb_click = QtWidgets.QDoubleSpinBox(); self.sb_click.setRange(0.02,0.20); self.sb_click.setSingleStep(0.005); self.sb_click.setDecimals(3); self.sb_click.setSuffix(" s")
-        detect_form.addRow("Hold grace (release delay):", self.sb_hold)
-        detect_form.addRow("Click gap (MMB window):", self.sb_click)
+        tip_click = "Window to treat a lone tick as a middle-click instead of scroll."
+        self.sb_click.setToolTip(tip_click)
+        detect_form.addRow(self._with_tip("Hold grace (release delay):", tip_hold), self.sb_hold)
+        detect_form.addRow(self._with_tip("Click gap (MMB window):", tip_click), self.sb_click)
         outer.addWidget(detect_box)
 
         self.chk_run = QtWidgets.QCheckBox("Enable remapper")
         self.chk_run.toggled.connect(self.on_run_toggled)
+        self.chk_run.setToolTip("Grabs the device and emits virtual scrolling when checked.")
         self.chk_mem = QtWidgets.QCheckBox("Remember last config")
+        self.chk_mem.setToolTip("Store current tuning so it loads next time.")
         self.chk_auto = QtWidgets.QCheckBox("Start with system"); self.chk_auto.toggled.connect(self.on_auto)
+        self.chk_auto.setToolTip("Create/remove an autostart entry under ~/.config/autostart.")
         checks_row = QtWidgets.QHBoxLayout()
         for cb in (self.chk_run, self.chk_mem, self.chk_auto):
             checks_row.addWidget(cb)
@@ -187,6 +207,12 @@ class Main(QtWidgets.QMainWindow):
             remember=bool(self.chk_mem.isChecked()), autostart=bool(self.chk_auto.isChecked()),
             run_enabled=bool(self.chk_run.isChecked())
         )
+
+    @staticmethod
+    def _with_tip(text, tip):
+        lbl = QtWidgets.QLabel(text)
+        lbl.setToolTip(tip)
+        return lbl
 
     def _sync_autostart_checkbox(self, initial=False):
         remember = self.chk_mem.isChecked()
