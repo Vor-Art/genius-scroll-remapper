@@ -2,7 +2,7 @@
 
 A tiny two-file helper that remaps the Genius Wireless Mouse middle touch surface into a smooth scroll-only pad while still letting you trigger a middle-click through smart tick detection. The GUI is written in PyQt5 and wraps the `RemapperScroll` core which uses `evdev` + `uinput`.
 
-![gui.png](assets/gui.png)
+<img src="assets/gui.png" width="450" />
 
 ## Requirements
 
@@ -63,7 +63,7 @@ On Linux this causes:
 
 ### Examples of such mice (no physical wheel)
 
-![mouse example](assets/400-MAWB216BK_FT3DX.png)
+<img src="assets/400-MAWB216BK_FT3DX.png" width="250" />
 
 - **Sanwa Supply 400-MAWB216** (touch middle; fixed-speed auto-scroll) — [product page](https://direct.sanwa.co.jp/ItemPage/400-MAWB216BK)  
 - Some **Genius Wireless Mouse** variants (e.g., vendor `0x0458`, product `0x0189`) that emit wheel ticks from the middle area instead of `BTN_MIDDLE`.
