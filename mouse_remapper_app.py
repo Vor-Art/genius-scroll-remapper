@@ -13,9 +13,9 @@ AUTOSTART = AUTOSTART_DIR/"genius-remapper.desktop"
 
 DEFAULTS = dict(
     device_name="Genius Wireless Mouse", vendor=0x0458, product=0x0189,
-    scroll_idle=0.15, div_y=60.0, div_x=120.0,
-    deadzone=3.0, max_step=3, hold_grace=0.08, click_gap=0.04,
-    remember=True, autostart=False
+    scroll_idle=0.15, div_y=10.0, div_x=8.0,
+    deadzone=0.0, max_step=1, hold_grace=0.05, click_gap=0.02,
+    remember=True, autostart=False, run_enabled=False
 )
 
 def load_cfg():
@@ -26,7 +26,12 @@ def load_cfg():
                 stored["hold_grace"] = stored.get("tick_grace", DEFAULTS["hold_grace"])
             if "click_gap" not in stored:
                 stored["click_gap"] = DEFAULTS["click_gap"]
-            return {**DEFAULTS, **stored}
+            if "run_enabled" not in stored:
+                stored["run_enabled"] = DEFAULTS["run_enabled"]
+            if stored.get("remember", True):
+                return {**DEFAULTS, **stored}
+            keep = {k: stored.get(k, DEFAULTS[k]) for k in ("remember", "autostart", "run_enabled")}
+            return {**DEFAULTS, **keep}
     except Exception: pass
     return dict(DEFAULTS)
 
@@ -34,7 +39,7 @@ def save_cfg(c):
     CFG_DIR.mkdir(parents=True, exist_ok=True)
     payload = dict(c)
     if not payload.get("remember", True):
-        payload = {k: payload[k] for k in ("remember", "autostart")}
+        payload = {k: payload[k] for k in ("remember", "autostart", "run_enabled")}
     CFG.write_text(json.dumps(payload, indent=2))
 
 def set_autostart(on):
@@ -58,6 +63,8 @@ class Main(QtWidgets.QMainWindow):
         self.q_in = queue.Queue()
         self.q_act = queue.Queue()
         self.remap = None
+        self.autostart_cache = self.cfg.get("autostart", False)
+        self._loading = False
 
         self.tray = QtWidgets.QSystemTrayIcon(self)
         ic = QtGui.QIcon.fromTheme("input-mouse")
@@ -103,15 +110,15 @@ class Main(QtWidgets.QMainWindow):
         detect_form.addRow("Click gap (MMB window):", self.sb_click)
         outer.addWidget(detect_box)
 
-        hb = QtWidgets.QHBoxLayout()
-        b1 = QtWidgets.QPushButton("Start"); b1.clicked.connect(self.start_remap)
-        b2 = QtWidgets.QPushButton("Stop");  b2.clicked.connect(self.stop_remap)
-        hb.addWidget(b1); hb.addWidget(b2); outer.addLayout(hb)
-
+        self.chk_run = QtWidgets.QCheckBox("Enable remapper")
+        self.chk_run.toggled.connect(self.on_run_toggled)
         self.chk_mem = QtWidgets.QCheckBox("Remember last config")
         self.chk_auto = QtWidgets.QCheckBox("Start with system"); self.chk_auto.toggled.connect(self.on_auto)
-        hb2 = QtWidgets.QHBoxLayout(); hb2.addWidget(self.chk_mem); hb2.addWidget(self.chk_auto); hb2.addStretch(1)
-        outer.addLayout(hb2)
+        checks_row = QtWidgets.QHBoxLayout()
+        for cb in (self.chk_run, self.chk_mem, self.chk_auto):
+            checks_row.addWidget(cb)
+        checks_row.addStretch(1)
+        outer.addLayout(checks_row)
 
         splitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
         left = QtWidgets.QWidget(); right = QtWidgets.QWidget()
@@ -125,20 +132,21 @@ class Main(QtWidgets.QMainWindow):
         splitter.setSizes([350, 350])
         outer.addWidget(splitter, 1)
 
-        self.status = QtWidgets.QLabel("Idle"); outer.addWidget(self.status)
+        self.status = QtWidgets.QLabel("Stopped"); outer.addWidget(self.status)
 
         self.cb_dev.currentIndexChanged.connect(self.on_cfg_change)
         for s in (self.sb_idle, self.sb_v, self.sb_h, self.sb_dead, self.sb_max, self.sb_hold, self.sb_click):
             s.valueChanged.connect(self.on_cfg_change)
-        self.chk_mem.toggled.connect(self.on_cfg_change)
+        self.chk_mem.toggled.connect(self.on_remember_toggled)
 
         self.apply_cfg()
         self.timer = QtCore.QTimer(self); self.timer.timeout.connect(self.pump); self.timer.start(50)
 
         if "--autostart" in sys.argv and self.cfg.get("autostart", False):
-            QtCore.QTimer.singleShot(400, self.start_remap)
+            QtCore.QTimer.singleShot(400, lambda: self.chk_run.setChecked(True))
 
     def apply_cfg(self):
+        self._loading = True
         idx = 0
         for i,(n,v,p) in enumerate(self.keys):
             if n==self.cfg["device_name"] and v==self.cfg["vendor"] and p==self.cfg["product"]:
@@ -151,8 +159,19 @@ class Main(QtWidgets.QMainWindow):
         self.sb_max.setValue(self.cfg["max_step"])
         self.sb_hold.setValue(self.cfg["hold_grace"])
         self.sb_click.setValue(self.cfg["click_gap"])
-        self.chk_mem.setChecked(self.cfg.get("remember", True))
-        self.chk_auto.setChecked(self.cfg.get("autostart", False))
+        remember_state = self.cfg.get("remember", True)
+        self.chk_mem.blockSignals(True)
+        self.chk_mem.setChecked(remember_state)
+        self.chk_mem.blockSignals(False)
+        self.autostart_cache = self.cfg.get("autostart", False)
+        self.chk_auto.blockSignals(True)
+        self.chk_auto.setChecked(self.autostart_cache)
+        self.chk_auto.blockSignals(False)
+        self._sync_autostart_checkbox(initial=True)
+        run_enabled = self.cfg.get("run_enabled", False) if remember_state else False
+        self._loading = False
+        if self.chk_run.isChecked() != run_enabled:
+            self.chk_run.setChecked(run_enabled)
         self.update_tip()
 
     def collect_cfg(self):
@@ -165,13 +184,43 @@ class Main(QtWidgets.QMainWindow):
             deadzone=float(self.sb_dead.value()), max_step=int(self.sb_max.value()),
             hold_grace=float(self.sb_hold.value()),
             click_gap=float(self.sb_click.value()),
-            remember=bool(self.chk_mem.isChecked()), autostart=bool(self.chk_auto.isChecked())
+            remember=bool(self.chk_mem.isChecked()), autostart=bool(self.chk_auto.isChecked()),
+            run_enabled=bool(self.chk_run.isChecked())
         )
 
+    def _sync_autostart_checkbox(self, initial=False):
+        remember = self.chk_mem.isChecked()
+        if remember:
+            self.chk_auto.blockSignals(True)
+            self.chk_auto.setEnabled(True)
+            self.chk_auto.setChecked(self.autostart_cache)
+            self.chk_auto.blockSignals(False)
+        else:
+            self.autostart_cache = self.chk_auto.isChecked()
+            self.chk_auto.blockSignals(True)
+            self.chk_auto.setChecked(False)
+            self.chk_auto.setEnabled(False)
+            self.chk_auto.blockSignals(False)
+        if not initial:
+            self.on_cfg_change()
+
+    def on_remember_toggled(self, on):
+        if self._loading:
+            return
+        if on and not self.chk_auto.isEnabled():
+            self.chk_auto.blockSignals(True)
+            self.chk_auto.setEnabled(True)
+            self.chk_auto.blockSignals(False)
+        self._sync_autostart_checkbox()
+
     def on_cfg_change(self, *a):
+        if self._loading:
+            return
         self.cfg = self.collect_cfg(); save_cfg(self.cfg); self.update_tip()
 
     def on_auto(self, on):
+        if self.chk_mem.isChecked():
+            self.autostart_cache = bool(on)
         self.cfg["autostart"]=bool(on); save_cfg(self.cfg)
         try: set_autostart(bool(on))
         except Exception as e: self.q_act.put(f"Autostart error: {e}")
@@ -188,13 +237,26 @@ class Main(QtWidgets.QMainWindow):
             on_recv=self.q_in.put, on_act=self.q_act.put
         )
         self.remap.start()
-        self.status.setText("Running"); self.act_start.setEnabled(False); self.act_stop.setEnabled(True)
+        self.status.setText("Running");
         self.q_act.put(f"Starting: {self.cfg['device_name']}")
 
     def stop_remap(self):
         if self.remap: self.remap.stop()
-        self.status.setText("Stopped"); self.act_start.setEnabled(True); self.act_stop.setEnabled(False)
+        self.status.setText("Stopped")
         self.update_tip()
+
+    def on_run_toggled(self, on):
+        if self._loading:
+            return
+        if on:
+            self.start_remap()
+            if not (self.remap and self.remap.is_running()):
+                self.chk_run.blockSignals(True)
+                self.chk_run.setChecked(False)
+                self.chk_run.blockSignals(False)
+        else:
+            self.stop_remap()
+        self.cfg = self.collect_cfg(); save_cfg(self.cfg)
 
     def pump(self):
         pushed = False
